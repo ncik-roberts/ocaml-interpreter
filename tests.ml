@@ -39,7 +39,7 @@ let mk_test ?(name="test") k st =
     k st
 
 let block_is tag size expected =
-  mk_test ~name:"block_is" ( fun st -> match st.acc with
+  mk_test ~name:"block_is" (fun st -> match st.acc with
     | Block b ->
         assert_equal ~printer:Block_tag.to_string b.tag tag;
         assert_equal ~printer:string_of_int b.size size;
@@ -48,6 +48,20 @@ let block_is tag size expected =
            fields expected
     | _ -> assert_failure "not a block")
 
+let block_contains_in_order tag size expected =
+  mk_test ~name:"block_contains" (fun st -> match st.acc with
+    | Block b ->
+        assert_equal ~printer:Block_tag.to_string b.tag tag;
+        assert_equal ~printer:string_of_int b.size size;
+        let fields = Heap.lookup st.heap b.addr b.size in
+        List.iter2 (fun field exp -> match exp with
+          | `Long i -> assert_equal ~printer:Value.to_string (Long i) field
+          | `Closure ->
+              assert_bool (Value.to_string field ^ "not function")
+                (match field with Block { tag = Some Block_tag.Closure } -> true
+                             | _ -> false)
+        ) fields expected
+    | _ -> assert_failure "not a block")
 
 (* All the tests we wish to run *)
 let tests : test list = Instruct.[
@@ -237,7 +251,7 @@ let tests : test list = Instruct.[
       Op ACC2;
       Op APPLY1;
       Op PUSH;
-      Op CONSTINT; Imm 10;
+      Op CONSTINT; Imm 11;
       Op PUSH;
       Op ACC1;
       Op APPLY1;
@@ -255,6 +269,12 @@ let tests : test list = Instruct.[
     tests = [
       runs;
       stack_equals [];
+      block_contains_in_order None 4 [
+        `Closure;
+        `Long 19;
+        `Closure;
+        `Long 20;
+      ];
     ];
     name = "6.ml";
   };
