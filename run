@@ -1,0 +1,72 @@
+#!/bin/bash
+
+###################################################################################
+#
+# run -r moduleName.ml    opens a repl (utop) containing a module named ModuleName
+# run -n moduleName.ml    runs the native executable for file moduleName.ml
+# run -b moduleName.ml    runs the bytecode executable for file moduleName.ml
+#
+
+repl=utop    # your favorite repl
+build=_build # build directory
+packages=( oUnit ) # packages you'd like to load into the repl
+
+option=${1?"Usage: $0 -[rbn] FILE"}
+file=${2?"Usage: $0 -[rbn] FILE"}
+file=${file%.*} # Remove .ml file extension if necessary
+
+if ! which $repl > /dev/null; then
+  echo "utop not found. Run the following command to install:"
+  echo "opam install utop"
+  exit 1
+fi
+
+dop() { # do and print
+  echo $@
+  eval $@
+}
+
+case $option in
+
+  # REPL
+  -r)
+    dop ocamlbuild -use-ocamlfind $file.byte
+
+    # Build -I flags for repl
+    flags=$(find $build -type d | while read d; do
+      echo -n "-I $d "
+    done)
+
+    # Build command to run in repl at startup
+    init=
+    for i in "${packages[@]}"; do
+      req="#require \"$i\";;"
+      echo $req
+      init=$init$req
+    done
+
+    load="#load_rec \"$file.cmo\";;"
+    echo $load
+
+    $repl $flags -init <(cat <<< "
+      $init
+      $load
+    ")
+
+    dop rm $file.byte
+    ;;
+
+  # BYTE
+  -b)
+    dop ocamlbuild -use-ocamlfind $file.byte
+    dop ./$file.byte
+    dop rm $file.byte
+    ;;
+
+  # NATIVE
+  -n)
+    dop ocamlbuild -use-ocamlfind $file.native
+    dop ./$file.native
+    dop rm $file.native
+    ;;
+esac
