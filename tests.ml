@@ -147,30 +147,30 @@ let tests : test list = Instruct.[
       Op CONST3; Op PUSH;
       Op ACC0; Op PUSH;
       Op CONST3; Op EQ;
-      Op BRANCHIFNOT; Imm 6;
+      Op BRANCHIFNOT; Imm 5;
       Op CONSTINT; Imm 6;
-      Op BRANCH; Imm 3;
+      Op BRANCH; Imm 2;
       Op CONST0; Op PUSH;
       Op ACC0; Op PUSH; Op ACC2;
       Op ADDINT; Op PUSH; Op ACC1;
       Op GTINT;
-      Op BRANCHIFNOT; Imm 20;
+      Op BRANCHIFNOT; Imm 19;
       Op ACC1; Op PUSH;
       Op ACC1; Op LEINT;
-      Op BRANCHIFNOT; Imm 8;
+      Op BRANCHIFNOT; Imm 7;
       Op ACC1; Op PUSH;
       Op ACC1; Op ADDINT;
-      Op BRANCH; Imm 22;
+      Op BRANCH; Imm 21;
       Op ACC1; Op PUSH;
       Op ACC2; Op MULINT;
-      Op BRANCH; Imm 16;
+      Op BRANCH; Imm 15;
       Op ACC1; Op PUSH;
       Op ACC1; Op SUBINT;
       Op PUSH; Op ACC2;
       Op EQ;
-      Op BRANCHIFNOT; Imm 4;
+      Op BRANCHIFNOT; Imm 3;
       Op CONST0;
-      Op BRANCH; Imm 4;
+      Op BRANCH; Imm 3;
       Op CONSTINT; Imm 100;
       Op PUSH;
       Op ACC0;
@@ -190,7 +190,7 @@ let tests : test list = Instruct.[
   };
 
   { program = [
-      Op BRANCH; Imm 9;
+      Op BRANCH; Imm 8;
       Op ACC0; Op PUSH;
       Op CONSTINT; Imm 17185;
       Op MULINT;
@@ -213,7 +213,7 @@ let tests : test list = Instruct.[
   };
 
   { program = [
-      Op BRANCH; Imm 11;
+      Op BRANCH; Imm 10;
       Op RESTART;
       Op GRAB; Imm 1;
       Op ACC1;

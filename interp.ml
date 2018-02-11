@@ -144,7 +144,10 @@ let run (p : program) : state =
     let step_branch (cond : bool) : state =
       if cond then
         let ofs = p.(st.pc + 1) in
-        { st with pc = st.pc + ofs }
+        (* Add 1 since jump should be calculated with respect to location of
+         * offset in the program, not with respect to location of jump
+         * op code. *)
+        { st with pc = st.pc + ofs + 1 }
       else { st with pc = st.pc + 2 }
     in
 
