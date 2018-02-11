@@ -107,7 +107,7 @@ let run (p : program) : state =
 
       { st with pc = code_value st.acc;
                 env = block st.acc;
-                extra_args = 0;
+                extra_args = i - 1;
                 stack = stack''; } in
 
     (* MAKEBLOCK<i> with tag <t> *)
@@ -291,6 +291,52 @@ let run (p : program) : state =
                   pc = code_value st.acc;
                   env = block st.acc; }
 
+    (* Grab closure *)
+    | GRAB ->
+        let n = p.(st.pc + 1) in
+        if st.extra_args >= n then { st with pc = st.pc + 2;
+                                             extra_args = st.extra_args - n; }
+        else
+          let (fields, stack') =
+            List_util.split_n st.stack (st.extra_args + 1) in
+          let restart_pc = st.pc - 1 in
+          let (addr, heap') =
+            Heap.alloc st.heap (Long restart_pc :: Block st.env :: fields) in
+
+          let closure = Block {
+            tag = Some Block_tag.Closure;
+            size = st.extra_args + 3;
+            addr;
+          } in
+
+          (* Pop remaining 3 pieces of info from stack *)
+          let (pc', env', extra_args', stack'') = match stack' with
+            | Long pc :: Block env :: Long extra_args :: stack'' ->
+                (pc, env, extra_args, stack'')
+            | _ -> assert false
+          in
+          { st with pc = pc';
+                    env = env';
+                    extra_args = extra_args';
+                    stack = stack'';
+                    heap = heap';
+                    acc = closure; }
+
+    (* The instruction referred to by the closure created by GRAB *)
+    | RESTART ->
+        let n = st.env.size - 2 in
+
+        (* Extract fields 1 through n+1 of current environment *)
+        let (env', fields) =
+          match Heap.lookup st.heap (st.env.addr + 1) (n+1) with
+          | Block env' :: fields -> (env', fields)
+          | _ -> assert false in
+
+        { st with extra_args = st.extra_args + n;
+                  env = env';
+                  stack = fields @ st.stack;
+                  pc = st.pc + 1; }
+
     (* Set global value *)
     | SETGLOBAL ->
         let n = p.(st.pc + 1) in
@@ -310,12 +356,17 @@ let run (p : program) : state =
     Printf.printf "pc: %d\n" st.pc;
     Printf.printf "acc: %s\n" (Value.to_string st.acc);
     Printf.printf "stack: %s\n" (List_util.to_string Value.to_string st.stack);
+    Printf.printf "extra_args: %d\n" st.extra_args;
+    Printf.printf "heap: %s\n" (Heap.to_string Value.to_string st.heap);
+    Printf.printf "env: %s\n" (Value.to_string (Block st.env));
+    Printf.printf "-------------------------\n";
   in
 
   print_state |> ignore;
 
   (* Run from st to the final state *)
   let rec loop (st : state) : state =
+    (*print_state st;*)
     if is_final st then st
     else loop (step st) in
 

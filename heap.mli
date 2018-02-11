@@ -12,3 +12,5 @@ val alloc : 'a t -> 'a list -> int * 'a t
  * Look up size elements of heap starting at address addr.
  *)
 val lookup : 'a t -> int -> int -> 'a list
+
+val to_string : ('a -> string) -> 'a t -> string

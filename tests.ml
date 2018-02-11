@@ -26,6 +26,8 @@ let acc_equals acc st =
     let st = Lazy.force st in
     assert_equal ~printer:Value.to_string st.acc acc
 
+let runs st = "runs" >:: fun _ -> Lazy.force st |> ignore
+
 let stack_equals stack st =
   "stack_equals" >:: fun _ ->
     let st = Lazy.force st in
@@ -51,6 +53,7 @@ let block_is tag size expected =
 let tests : test list = Instruct.[
   { program = [ Op CONSTINT; Imm 0x4321; ];
     tests = [
+      runs;
       acc_equals (Long 0x4321);
     ];
     name = "CONSTINT0";
@@ -60,6 +63,7 @@ let tests : test list = Instruct.[
                 Op PUSHCONSTINT; Imm 0x8765;
                 Op PUSH; ];
     tests = [
+      runs;
       stack_equals [ Long 0x8765; Long 0x4321 ];
       acc_equals (Long 0x8765);
     ];
@@ -70,6 +74,7 @@ let tests : test list = Instruct.[
                 Op PUSHCONSTINT; Imm 0x8765;
                 Op MAKEBLOCK2; Imm 0x0; ];
     tests = [
+      runs;
       stack_equals [];
       block_is None 2 [ Long 0x8765; Long 0x4321; ];
     ];
@@ -85,6 +90,7 @@ let tests : test list = Instruct.[
                 Op MAKEBLOCK2; Imm 0;
                 Op POP; Imm 2; ];
     tests = [
+      runs;
       stack_equals [];
       block_is None 2 [ Long 0x4321; Long 0x8765; ];
     ];
@@ -105,6 +111,7 @@ let tests : test list = Instruct.[
       Op POP; Imm 3;
     ];
     tests = [
+      runs;
       stack_equals [];
       block_is None 3 [ Long 7; Long 15; Long 24; ];
     ];
@@ -129,6 +136,7 @@ let tests : test list = Instruct.[
       Op POP; Imm 3;
     ];
     tests = [
+      runs;
       stack_equals [];
       block_is None 3 [ Long 3; Long 8; Long 6; ];
     ];
@@ -174,6 +182,7 @@ let tests : test list = Instruct.[
       Op POP; Imm 3;
     ];
     tests = [
+      runs;
       stack_equals [];
       block_is None 3 [ Long 3; Long 6; Long 0; ];
     ];
@@ -197,9 +206,57 @@ let tests : test list = Instruct.[
       Op POP; Imm 2;
     ];
     tests = [
+      runs;
       stack_equals [];
     ];
     name = "5.ml";
+  };
+
+  { program = [
+      Op BRANCH; Imm 11;
+      Op RESTART;
+      Op GRAB; Imm 1;
+      Op ACC1;
+      Op PUSH;
+      Op ACC1;
+      Op ADDINT;
+      Op RETURN; Imm 2;
+      Op CLOSURE; Imm 0; Imm (-8);
+      Op PUSH;
+      Op CONSTINT; Imm 5;
+      Op OFFSETINT; Imm 7;
+      Op PUSH;
+      Op CONST3;
+      Op OFFSETINT; Imm 4;
+      Op PUSH;
+      Op ACC; Imm 2;
+      Op APPLY2;
+      Op PUSH;
+      Op CONSTINT; Imm 9;
+      Op PUSH;
+      Op ACC2;
+      Op APPLY1;
+      Op PUSH;
+      Op CONSTINT; Imm 10;
+      Op PUSH;
+      Op ACC1;
+      Op APPLY1;
+      Op PUSH;
+      Op ACC0;
+      Op PUSH;
+      Op ACC2;
+      Op PUSH;
+      Op ACC4;
+      Op PUSH;
+      Op ACC6;
+      Op MAKEBLOCK; Imm 4; Imm 0;
+      Op POP; Imm 4;
+    ];
+    tests = [
+      runs;
+      stack_equals [];
+    ];
+    name = "6.ml";
   };
 ]
 
