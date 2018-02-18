@@ -6,10 +6,14 @@ module E = Evm
 
 type t =
   | Evm of E.instr
-  | Const of int
   | Push_caml_code_offset of int
 
-let stack_depth = 16
+(* Constants relevant to execution of EVM *)
+module C = struct
+  let stack_depth = 16 (* How deep instructions can index into the stack *)
+  let acc_addr = 0L (* Address where acc is saved *)
+  let heap_ctr_addr = 32L (* Address where heap counter is saved *)
+end
 
 (* List of EVM instructions, and length of Caml bytecode
  * that generated those instructions *)
@@ -28,6 +32,41 @@ let instrs (is : E.instr list) : group = {
   instrs = List.map (fun i -> Evm i) is;
   caml_len = 1;
 }
+
+(* Make header with given size and tag *)
+let header ~size ~tag = Int64.of_int (size lsl 1 land tag)
+
+let instr_makeblock ~size ~tag ~caml_len =
+  let make_header = E.[
+    (* Create and store tag *)
+    push (header ~size ~tag);
+    push C.heap_ctr_addr;
+    MLOAD;
+    MSTORE;
+  ] in
+
+  let range = Util.range ~lo:1 ~hi:(size+1) in
+  let make_body = Util.concat_map range ~f:(fun i -> E.[
+    push C.heap_ctr_addr;
+    MLOAD;
+    push (Int64.of_int (32 * i));
+    ADD;
+    MSTORE;
+  ]) in
+
+  (* Add size+1 to heap counter, and store old heap counter at top of stack *)
+  let update_heap_ctr = E.[
+    push C.heap_ctr_addr;
+    DUP 1;
+    MLOAD;
+    push (Int64.of_int (32 * (size+1)));
+    ADD;
+    push C.heap_ctr_addr;
+    MSTORE;
+  ] in
+
+  { (instrs (make_header @ make_body @ update_heap_ctr))
+      with caml_len }
 
 let convert (p : int array) : program =
   (* Convert one group of instructions *)
@@ -55,6 +94,10 @@ let convert (p : int array) : program =
     | I.LSRINT -> assert false
     | I.ASRINT -> assert false
 
+    | I.OFFSETINT ->
+        let n = Int64.of_int p.(i + 1) in
+        { (instrs E.[ push n; ADD; ]) with caml_len = 2 }
+
     (* Caml: Comparison operators pop top of stack and compare with the
      *   accumulator, storing the result value in accumulator.
      * EVM: Comparison operators compare top two elements on stack, storing
@@ -68,17 +111,6 @@ let convert (p : int array) : program =
     | I.GEINT -> instrs E.[ LT; ISZERO; ]
     | I.GTINT -> instrs E.[ GT ]
 
-    (* Caml: Store a new value in accumulator, discarding old value.
-     * EVM: Pop accumulator from stack and push constant.
-     *)
-    | I.CONST0 -> instrs E.[ POP; push 0L; ]
-    | I.CONST1 -> instrs E.[ POP; push 1L; ]
-    | I.CONST2 -> instrs E.[ POP; push 2L; ]
-    | I.CONST3 -> instrs E.[ POP; push 3L; ]
-    | I.CONSTINT ->
-        let n = Int64.of_int p.(i+1) in
-        { (instrs E.[ POP; push n; ]) with caml_len = 2 }
-
     (* Caml: Push the accumulator onto the stack and set the accumulator to
      *   a specified value.
      * EVM: Push specified value onto stack.
@@ -91,11 +123,22 @@ let convert (p : int array) : program =
         let n = Int64.of_int p.(i+1) in
         { (instrs E.[ push n; ]) with caml_len = 2 }
 
+    (* Caml: Store a new value in accumulator, discarding old value.
+     * EVM: Pop accumulator from stack and push constant.
+     *)
+    | I.CONST0 -> instrs E.[ POP; push 0L; ]
+    | I.CONST1 -> instrs E.[ POP; push 1L; ]
+    | I.CONST2 -> instrs E.[ POP; push 2L; ]
+    | I.CONST3 -> instrs E.[ POP; push 3L; ]
+    | I.CONSTINT ->
+        let n = Int64.of_int p.(i+1) in
+        { (instrs E.[ POP; push n; ]) with caml_len = 2 }
+
     (* Caml: Put accumulator onto stack and then peek (i+1)th element of stack
      *   into accumulator.
      * EVM: Duplicate (i+1)th element of stack.
      *)
-    | I.PUSHACC0 -> instrs E.[ DUP 0 ]
+    | I.PUSH | I.PUSHACC0 -> instrs E.[ DUP 0 ]
     | I.PUSHACC1 -> instrs E.[ DUP 1 ]
     | I.PUSHACC2 -> instrs E.[ DUP 2 ]
     | I.PUSHACC3 -> instrs E.[ DUP 3 ]
@@ -105,7 +148,8 @@ let convert (p : int array) : program =
     | I.PUSHACC7 -> instrs E.[ DUP 7 ]
     | I.PUSHACC ->
         let n = p.(i+1) + 1 in
-        if n > stack_depth then failwith "Stack limit exceeded in PUSHACC instruction"
+        if n > C.stack_depth
+        then failwith "Stack limit exceeded in PUSHACC instruction"
         else { (instrs E.[ DUP n ]) with caml_len = 2 }
 
     (* Caml: Replace accumulator with ith element of stack.
@@ -121,8 +165,59 @@ let convert (p : int array) : program =
     | I.ACC7 -> instrs E.[ POP; DUP 7; ]
     | I.ACC ->
         let n = p.(i+1) in
-        if n > stack_depth then failwith "Stack limit exceeded in ACC instruction"
+        if n > C.stack_depth
+        then failwith "Stack limit exceeded in ACC instruction"
         else { (instrs E.[ POP; DUP n; ]) with caml_len = 2 }
+
+    (* Caml: Pop n items from the stack.
+     * EVM: Place top of stack in designated "save" location. Pop n items from stack.
+     *   Restore top of stack from "save" location.
+     *)
+    | I.POP ->
+        let n = p.(i+1) in
+        let setup = E.[ push C.acc_addr; MSTORE; ] in
+        let body = Util.tabulate ~f:(fun _ -> E.POP) n in
+        let teardown = E.[ push C.acc_addr; MLOAD; ] in
+        { (instrs (setup @ body @ teardown)) with caml_len = 2 }
+
+   (* Caml: Branch to pc + offset (under certain conditions)
+    * EVM: Branch to absolute pc (under certain conditions)
+    *)
+    | I.BRANCH ->
+        let ofs = p.(i+1) in
+        { instrs = E.[ Push_caml_code_offset ofs;
+                       Evm JUMP; ];
+          caml_len = 2; }
+    | I.BRANCHIF ->
+        let ofs = p.(i+1) in
+        { instrs = E.[ Push_caml_code_offset ofs;
+                       Evm JUMPI; ];
+          caml_len = 2; }
+    | I.BRANCHIFNOT ->
+        let ofs = p.(i+1) in
+        { instrs = E.[ Evm ISZERO;
+                       Push_caml_code_offset ofs;
+                       Evm JUMPI; ];
+          caml_len = 2; }
+
+    (* Caml: Allocate block on heap with given size and tag, and place
+     *   elements popped off stack into heap.
+     * EVM: Same semantics (modulo the accumulator).
+     *)
+    | I.MAKEBLOCK ->
+        instr_makeblock ~size:p.(i+1) ~tag:p.(i+2) ~caml_len:3
+    | I.MAKEBLOCK1 ->
+        instr_makeblock ~size:1 ~tag:p.(i+1) ~caml_len:2
+    | I.MAKEBLOCK2 ->
+        instr_makeblock ~size:2 ~tag:p.(i+1) ~caml_len:2
+    | I.MAKEBLOCK3 ->
+        instr_makeblock ~size:3 ~tag:p.(i+1) ~caml_len:2
   in
-  consume |> ignore;
-  []
+
+  let rec loop (i : int) (acc : program) : program =
+    if i >= Array.length p then List.rev acc
+    else
+      let group = consume i in
+      loop (i + group.caml_len) (group :: acc)
+
+  in loop 0 []
