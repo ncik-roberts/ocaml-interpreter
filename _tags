@@ -2,3 +2,4 @@ true: package(oUnit)
 "evm-compiler": include
 "util": include
 "tests": include
+"copy_code": include

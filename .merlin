@@ -2,4 +2,5 @@ B _build
 B _build/evm-compiler
 B _build/util
 B _build/tests
+B _build/copy_code
 PKG oUnit
