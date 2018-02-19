@@ -2,6 +2,7 @@ open OUnit2
 
 let ounit_test = "all" >::: [
   Test_interp.ounit_test;
+  Test_evm.ounit_test;
 ]
 
 let _ = begin

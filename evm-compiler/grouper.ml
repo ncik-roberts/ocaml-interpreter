@@ -138,14 +138,14 @@ let convert (p : int array) : program =
      *   into accumulator.
      * EVM: Duplicate (i+1)th element of stack.
      *)
-    | I.PUSH | I.PUSHACC0 -> instrs E.[ DUP 0 ]
-    | I.PUSHACC1 -> instrs E.[ DUP 1 ]
-    | I.PUSHACC2 -> instrs E.[ DUP 2 ]
-    | I.PUSHACC3 -> instrs E.[ DUP 3 ]
-    | I.PUSHACC4 -> instrs E.[ DUP 4 ]
-    | I.PUSHACC5 -> instrs E.[ DUP 5 ]
-    | I.PUSHACC6 -> instrs E.[ DUP 6 ]
-    | I.PUSHACC7 -> instrs E.[ DUP 7 ]
+    | I.PUSH | I.PUSHACC0 -> instrs E.[ DUP 1 ]
+    | I.PUSHACC1 -> instrs E.[ DUP 2 ]
+    | I.PUSHACC2 -> instrs E.[ DUP 3 ]
+    | I.PUSHACC3 -> instrs E.[ DUP 4 ]
+    | I.PUSHACC4 -> instrs E.[ DUP 5 ]
+    | I.PUSHACC5 -> instrs E.[ DUP 6 ]
+    | I.PUSHACC6 -> instrs E.[ DUP 7 ]
+    | I.PUSHACC7 -> instrs E.[ DUP 8 ]
     | I.PUSHACC ->
         let n = p.(i+1) + 1 in
         if n > C.stack_depth
@@ -155,16 +155,16 @@ let convert (p : int array) : program =
     (* Caml: Replace accumulator with ith element of stack.
      * EVM: Pop top of stack and duplicate ith element of stack.
      *)
-    | I.ACC0 -> instrs E.[ POP; DUP 0; ]
-    | I.ACC1 -> instrs E.[ POP; DUP 1; ]
-    | I.ACC2 -> instrs E.[ POP; DUP 2; ]
-    | I.ACC3 -> instrs E.[ POP; DUP 3; ]
-    | I.ACC4 -> instrs E.[ POP; DUP 4; ]
-    | I.ACC5 -> instrs E.[ POP; DUP 5; ]
-    | I.ACC6 -> instrs E.[ POP; DUP 6; ]
-    | I.ACC7 -> instrs E.[ POP; DUP 7; ]
+    | I.ACC0 -> instrs E.[ POP; DUP 1; ]
+    | I.ACC1 -> instrs E.[ POP; DUP 2; ]
+    | I.ACC2 -> instrs E.[ POP; DUP 3; ]
+    | I.ACC3 -> instrs E.[ POP; DUP 4; ]
+    | I.ACC4 -> instrs E.[ POP; DUP 5; ]
+    | I.ACC5 -> instrs E.[ POP; DUP 6; ]
+    | I.ACC6 -> instrs E.[ POP; DUP 7; ]
+    | I.ACC7 -> instrs E.[ POP; DUP 8; ]
     | I.ACC ->
-        let n = p.(i+1) in
+        let n = p.(i+1) + 1 in
         if n > C.stack_depth
         then failwith "Stack limit exceeded in ACC instruction"
         else { (instrs E.[ POP; DUP n; ]) with caml_len = 2 }
@@ -225,4 +225,9 @@ let convert (p : int array) : program =
       let group = consume i in
       loop (i + group.caml_len) (group :: acc)
 
-  in loop 0 []
+  in
+
+  (* Add initial setup code: need to push 0 to accumulator at first *)
+  match loop 0 [] with
+  | [] -> [ { caml_len = 0; instrs = [ Evm (E.push 0L) ] } ]
+  | g :: gs -> { g with instrs = Evm (E.push 0L) :: g.instrs } :: gs

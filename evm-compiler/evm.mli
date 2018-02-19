@@ -52,5 +52,6 @@ type program = instr list
 val int64_to_bytes : int64 -> Byte_seq.t * int
 val push : int64 -> instr
 
+val instr_to_string : instr -> string
 val to_bytes : program -> int list
 val to_string : program -> string
