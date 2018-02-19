@@ -182,21 +182,26 @@ let convert (p : int array) : program =
 
    (* Caml: Branch to pc + offset (under certain conditions)
     * EVM: Branch to absolute pc (under certain conditions)
+    *
+    * We add 1 to offset because, in Caml, the offset is calculated with
+    * respect to the byte after the branch instruction. For our purposes,
+    * it will be easier to calculate the offset with respect to the
+    * branch instruction.
     *)
     | I.BRANCH ->
         let ofs = p.(i+1) in
-        { instrs = E.[ Push_caml_code_offset ofs;
+        { instrs = E.[ Push_caml_code_offset (ofs+1);
                        Evm JUMP; ];
           caml_len = 2; }
     | I.BRANCHIF ->
         let ofs = p.(i+1) in
-        { instrs = E.[ Push_caml_code_offset ofs;
+        { instrs = E.[ Push_caml_code_offset (ofs+1);
                        Evm JUMPI; ];
           caml_len = 2; }
     | I.BRANCHIFNOT ->
         let ofs = p.(i+1) in
         { instrs = E.[ Evm ISZERO;
-                       Push_caml_code_offset ofs;
+                       Push_caml_code_offset (ofs+1);
                        Evm JUMPI; ];
           caml_len = 2; }
 

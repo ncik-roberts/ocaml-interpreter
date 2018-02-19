@@ -158,7 +158,7 @@ let run (p : program) : state =
                 stack = st.acc :: st.stack; } in
 
     match of_opcode p.(st.pc) with
-    (* Push constant item onto stack *)
+    (* Set the accumulator to the given value *)
     | CONST0 -> step_const 0
     | CONST1 -> step_const 1
     | CONST2 -> step_const 2

@@ -12,7 +12,7 @@ type t =
   | Evm of Evm.instr
   | Push_caml_code_offset of int
 
-type group = t list
+type group = { instrs : t list; caml_len : int; }
 type program = group list
 
 (* Convert from array of bytes representing OCaml bytecode program
