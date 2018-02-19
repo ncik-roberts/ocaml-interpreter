@@ -286,9 +286,4 @@ let ounit_tests = List.map (fun test ->
     test.name >::: List.map ((|>) final) test.tests)
   tests
 
-let ounit_test = "all" >::: ounit_tests
-
-let _ = begin
-  try run_test_tt_main ounit_test with Unix.Unix_error _ -> ();
-  print_string "\n\nAll tests run!";
-end
+let ounit_test = "interp" >::: ounit_tests

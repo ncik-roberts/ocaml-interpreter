@@ -1,4 +1,5 @@
 B _build
 B _build/evm-compiler
 B _build/util
+B _build/tests
 PKG oUnit
