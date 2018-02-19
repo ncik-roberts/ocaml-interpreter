@@ -54,4 +54,5 @@ val push : int64 -> instr
 
 val instr_to_string : instr -> string
 val to_bytes : program -> int list
+val to_hex_string : program -> string
 val to_string : program -> string

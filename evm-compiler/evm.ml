@@ -200,3 +200,6 @@ let push n =
 
 let to_string program =
   String.concat "\n" (List.map instr_to_string program)
+
+let to_hex_string program =
+  String.concat "" (List.map (Printf.sprintf "%02x") (to_bytes program))
