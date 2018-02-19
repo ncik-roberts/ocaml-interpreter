@@ -58,8 +58,8 @@ let instr_makeblock ~size ~tag ~caml_len =
   (* Add size+1 to heap counter, and store old heap counter at top of stack *)
   let update_heap_ctr = E.[
     push C.heap_ctr_addr;
-    DUP 1;
     MLOAD;
+    DUP 1;
     push (Int64.of_int (32 * (size+1)));
     ADD;
     push C.heap_ctr_addr;
@@ -243,7 +243,23 @@ let convert (p : int array) : program =
     Evm (E.MSTORE);
   ] in
 
+  (* Currently, let's just load the value at the address on the top of the stack *)
+  (* TODO: Read the block size from the heap, and return the appropriate size of memory
+   * (instead of always returning just one word) *)
+  let teardown_instrs = [
+    Evm (E.push 0x20L);
+    Evm (E.SWAP 1);
+    Evm E.RETURN;
+  ] in
+
   (* Add initial setup code: need to push 0 to accumulator at first *)
   match loop 0 [] with
-  | [] -> [ { caml_len = 0; instrs = setup_instrs } ]
-  | g :: gs -> { g with instrs = setup_instrs @ g.instrs } :: gs
+  | [] -> [ { caml_len = 0; instrs = setup_instrs @ teardown_instrs } ]
+  | [g] -> [ { g with instrs = setup_instrs @ g.instrs @ teardown_instrs } ]
+  | g :: gs ->
+      let (hd, last) = match List_util.split_n gs (List.length gs - 1) with
+        | (hd, [last]) -> (hd, last)
+        | _ -> assert false
+      in
+      { g with instrs = setup_instrs @ g.instrs  } ::
+        hd @ [{ last with instrs = last.instrs @ teardown_instrs }]
