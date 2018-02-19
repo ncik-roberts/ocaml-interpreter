@@ -13,6 +13,7 @@ module C = struct
   let stack_depth = 16 (* How deep instructions can index into the stack *)
   let acc_addr = 0L (* Address where acc is saved *)
   let heap_ctr_addr = 32L (* Address where heap counter is saved *)
+  let first_free_addr = 64L (* Initial value of heap counter *)
 end
 
 (* List of EVM instructions, and length of Caml bytecode
@@ -63,6 +64,11 @@ let instr_makeblock ~size ~tag ~caml_len =
     ADD;
     push C.heap_ctr_addr;
     MSTORE;
+
+    (* Add 32 to old heap counter so that it points to the first entry
+     * in the block (and not the tag) *)
+    push 0x20L;
+    ADD;
   ] in
 
   { (instrs (make_header @ make_body @ update_heap_ctr))
@@ -227,7 +233,17 @@ let convert (p : int array) : program =
 
   in
 
+  (* - Initialize accumulator to 0;
+   * - Initialize heap counter to first free element;
+   *)
+  let setup_instrs = [
+    Evm (E.push 0L);
+    Evm (E.push C.first_free_addr);
+    Evm (E.push C.heap_ctr_addr);
+    Evm (E.MSTORE);
+  ] in
+
   (* Add initial setup code: need to push 0 to accumulator at first *)
   match loop 0 [] with
-  | [] -> [ { caml_len = 0; instrs = [ Evm (E.push 0L) ] } ]
-  | g :: gs -> { g with instrs = Evm (E.push 0L) :: g.instrs } :: gs
+  | [] -> [ { caml_len = 0; instrs = setup_instrs } ]
+  | g :: gs -> { g with instrs = setup_instrs @ g.instrs } :: gs
