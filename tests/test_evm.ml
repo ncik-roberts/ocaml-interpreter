@@ -78,10 +78,16 @@ let setup_instrs = [
   E.MSTORE;
 ]
 
+let teardown_instrs = [
+  E.push 0x20L;
+  E.SWAP 1;
+  E.RETURN;
+]
+
 let mk_test (t : test) : OUnit2.test =
   t.name >:: fun _ ->
     assert_equal ~printer:(List_util.to_string E.instr_to_string)
-      (G.convert t.input |> J.process) (setup_instrs @ t.output)
+      (G.convert t.input |> J.process) (setup_instrs @ t.output @ teardown_instrs)
 
 let ounit_test =
   "evm" >::: List.map mk_test tests

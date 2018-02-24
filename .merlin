@@ -4,4 +4,5 @@ B _build/util
 B _build/tests
 B _build/copy_code
 B _build/top
+B _build/interp
 PKG oUnit

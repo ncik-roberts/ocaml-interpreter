@@ -4,3 +4,4 @@ true: package(oUnit)
 "tests": include
 "copy_code": include
 "top": include
+"interp": include

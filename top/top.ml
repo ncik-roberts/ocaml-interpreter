@@ -23,11 +23,7 @@ let main () =
            raise Exit
   in
 
-  (* Suffocate stderr *)
-  let null = Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0 in
-  let pid = Unix.(create_process ocamlc [| filename |] stdin stdout null) in
-  Unix.waitpid [] pid |> ignore;
-  Unix.close null;
+  Unix.system (ocamlc ^ " -dinstr " ^ filename) |> ignore;
 
   let cmo_filename = cmo filename in
   let cmo_file = open_in cmo_filename in
@@ -52,6 +48,7 @@ let main () =
   let output = result
     |> Array.of_list
     |> Grouper.convert
+    |> (fun x -> Printf.printf "%s\n" (Grouper.to_string x); x)
     |> Jump_dests.process
     |> Copy_code.copy_code
     |> Copy_code.to_evm
