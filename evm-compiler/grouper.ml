@@ -7,13 +7,19 @@ module E = Evm
 type t =
   | Evm of E.instr
   | Push_caml_code_offset of int
+  | Goto of Label.t
+  | Label of Label.t
 
 (* Constants relevant to execution of EVM *)
 module C = struct
   let stack_depth = 16 (* How deep instructions can index into the stack *)
   let acc_addr = 0L (* Address where acc is saved *)
-  let heap_ctr_addr = 32L (* Address where heap counter is saved *)
-  let first_free_addr = 64L (* Initial value of heap counter *)
+  let heap_ctr_addr = 0x20L (* Address where heap counter is saved *)
+  let extra_args_addr = 0x40L (* Address where extra args is saved *)
+  let env_addr = 0x60L (* Address where env is saved *)
+  let first_free_addr = 0x80L (* Initial value of heap counter *)
+
+  let closure_tag = 1
 end
 
 (* List of EVM instructions, and length of Caml bytecode
@@ -39,6 +45,8 @@ let to_string (p : program) : string =
   let instr_to_string = function
     | Evm e -> "\t" ^ E.instr_to_string e
     | Push_caml_code_offset i -> "\tofs " ^ string_of_int i
+    | Goto lbl -> Printf.sprintf "\tgoto %d" (Label.to_int lbl)
+    | Label lbl -> Printf.sprintf "\tlabel %d" (Label.to_int lbl)
   in
   let group_to_string (g, total_caml_len) : string =
     Printf.sprintf "Group (%d; total: %d):\n%s"
@@ -62,7 +70,9 @@ let branch_cond vl ofs cond =
       Evm JUMPI;
     ]; caml_len = 3; }
 
-let instr_makeblock ~size ~tag ~caml_len =
+(* Allocate block of given size and tag, update heap ctr,
+ * and leave address to block at top of stack *)
+let alloc ~size ~tag =
   let make_header = E.[
     (* Create and store tag *)
     push (header ~size ~tag);
@@ -71,16 +81,7 @@ let instr_makeblock ~size ~tag ~caml_len =
     MSTORE;
   ] in
 
-  let range = Util.range ~lo:1 ~hi:(size+1) in
-  let make_body = Util.concat_map range ~f:(fun i -> E.[
-    push C.heap_ctr_addr;
-    MLOAD;
-    push (Int64.of_int (32 * i));
-    ADD;
-    MSTORE;
-  ]) in
-
-  (* Add size+1 to heap counter, and store old heap counter at top of stack *)
+  (* Set heap ctr to new value, and leave ptr at top of stack *)
   let update_heap_ctr = E.[
     push C.heap_ctr_addr;
     MLOAD;
@@ -96,7 +97,19 @@ let instr_makeblock ~size ~tag ~caml_len =
     ADD;
   ] in
 
-  { (instrs (make_header @ make_body @ update_heap_ctr))
+  make_header @ update_heap_ctr
+
+let instr_makeblock ~size ~tag ~caml_len =
+  let range = Util.range ~lo:0 ~hi:size in
+  let make_body = Util.concat_map range ~f:(fun i -> E.[
+    SWAP 1;
+    DUP 2;
+    push (Int64.of_int (32 * i));
+    ADD;
+    MSTORE;
+  ]) in
+
+  { (instrs (alloc ~size ~tag @ make_body))
       with caml_len }
 
 let convert (p : int array) : program =
@@ -262,6 +275,88 @@ let convert (p : int array) : program =
         instr_makeblock ~size:2 ~tag:p.(i+1) ~caml_len:2
     | I.MAKEBLOCK3 ->
         instr_makeblock ~size:3 ~tag:p.(i+1) ~caml_len:2
+
+    (* Caml: Pop n elements from the stack.
+     *       Check value of extraArgs. If it's positive, then the
+     *       value is decremnted, and pc jumps to the value of
+     *       the accumulator. Otherwise, three values from the
+     *       stack are used for pc, environment, and extraArgs.
+     *)
+    | I.RETURN ->
+        let n = p.(i+1) in
+
+        let pops = Util.tabulate ~f:(fun _ -> Evm E.POP) n in
+        let label = Label.create () in
+        let instrs = E.[
+          Evm (push C.extra_args_addr);
+          Evm MLOAD;
+
+          Goto label;
+          Evm JUMPI;
+
+          (* Here, extra_args was 0 *)
+          (* Stack:  pc :: env :: extraArgs :: ... *)
+          Evm (SWAP 2);
+          Evm (push C.extra_args_addr);
+          Evm MSTORE;
+
+          (* Stack: env :: pc :: ... *)
+          Evm (push C.env_addr);
+          Evm MSTORE;
+
+          (* Stack: pc :: ... *)
+          Evm JUMP;
+
+          Label label;
+        ] in
+
+        { instrs = pops @ instrs; caml_len = 2; }
+
+
+    (* Caml: Check value of n. If it's greater than 0, then the
+     *   accumulator is put onto the stack. A closure of n+1 elements
+     *   is created in the accumulator. The code value is set to
+     *   pc + ofs, and the other elements are set to values popped
+     *   from the stack.
+     *
+     * EVM: Same, except we can just push the caml code offset to
+     * the stack.
+     *)
+    | I.CLOSURE ->
+        let n = p.(i+1) in
+        let ofs = p.(i+2) in
+
+        (* Optionally push acc to stack *)
+        let setup =
+          if n > 0 then E.[ Evm (DUP 1) ] else []
+        in
+
+        (* Perform allocation of closure *)
+        let do_alloc =
+          alloc ~size:(n+1) ~tag:C.closure_tag
+            |> List.map (fun i -> Evm i)
+        in
+
+        (* Store code_val in memory *)
+        let code_val = E.[
+          Push_caml_code_offset ofs;
+          Evm (DUP 2);
+          Evm MSTORE;
+        ] in
+
+        (* Store each member of stack in memory *)
+        let move_from_stack =
+          Util.range ~lo:1 ~hi:(n+1)
+            |> Util.concat_map ~f:(fun i -> E.[
+              Evm (SWAP 1);
+              Evm (DUP 2);
+              Evm (push (Int64.of_int (0x20 * i)));
+              Evm ADD;
+              Evm MSTORE;
+            ]) in
+
+        { instrs = setup @ do_alloc @ code_val @ move_from_stack;
+          caml_len = 3; }
 
     | i -> Printf.printf "%d\n" (I.to_opcode i);
            assert false

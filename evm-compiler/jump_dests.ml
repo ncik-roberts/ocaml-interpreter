@@ -37,7 +37,7 @@ let insert_labels (p : G.program) : program =
   let step (dests : L.t M.t) ((g, total_caml_len) : G.t G.group * int) =
 
     let step_instr (dests : L.t M.t) : G.t -> L.t M.t = function
-      | G.Evm _ -> dests
+      | G.Evm _ | G.Goto _ | G.Label _ -> dests
       | G.Push_caml_code_offset i ->
           let abs_offset = total_caml_len + G.(g.caml_len) + i in
           if M.mem abs_offset dests then dests
@@ -51,9 +51,9 @@ let insert_labels (p : G.program) : program =
 
   (* caml_len is 0 because a jumpdest instruction doesn't correspond to any
    * caml instructions *)
-  let jump_dest lbl = G.{
-    caml_len = 0;
-    instrs = [ Label lbl; ];
+  let jump_dest lbl = {
+    G.caml_len = 0;
+    G.instrs = [ Label lbl; ];
   } in
 
   Util.concat_map p ~f:(fun (g, total_caml_len) ->
@@ -62,6 +62,8 @@ let insert_labels (p : G.program) : program =
           G.instrs =
             List.map (function
               | G.Evm i -> Evm i
+              | G.Goto lbl -> Goto lbl
+              | G.Label lbl -> Label lbl
               | G.Push_caml_code_offset i ->
                   Goto (M.find (total_caml_len + G.(g.caml_len) + i) dests))
             G.(g.instrs) }

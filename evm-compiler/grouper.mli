@@ -11,6 +11,8 @@
 type t =
   | Evm of Evm.instr
   | Push_caml_code_offset of int
+  | Goto of Label.t
+  | Label of Label.t
 
 type 'a group = { instrs : 'a list; caml_len : int; }
 type program = (t group * int) list
