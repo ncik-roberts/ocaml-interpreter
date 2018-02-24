@@ -36,13 +36,10 @@ let insert_labels (p : G.program) : program =
    *)
   let step (dests : L.t M.t) ((g, total_caml_len) : G.t G.group * int) =
 
-    (* Perform jump from offset of NEXT caml instruction *)
-    let n = total_caml_len + G.(g.caml_len) in
-
     let step_instr (dests : L.t M.t) : G.t -> L.t M.t = function
       | G.Evm _ -> dests
       | G.Push_caml_code_offset i ->
-          let abs_offset = n + i in
+          let abs_offset = total_caml_len + G.(g.caml_len) + i in
           if M.mem abs_offset dests then dests
           else M.add abs_offset (L.create ()) dests
     in
@@ -60,14 +57,13 @@ let insert_labels (p : G.program) : program =
   } in
 
   Util.concat_map p ~f:(fun (g, total_caml_len) ->
-    let n = total_caml_len + G.(g.caml_len) in
     let g' =
       { g with
           G.instrs =
             List.map (function
               | G.Evm i -> Evm i
               | G.Push_caml_code_offset i ->
-                  Goto (M.find (n+i) dests))
+                  Goto (M.find (total_caml_len + G.(g.caml_len) + i) dests))
             G.(g.instrs) }
    in
 
@@ -117,7 +113,7 @@ let remove_labels (p : program) : E.instr list list =
           let push = E.push (Int64.of_int i) in
           let padding = 4 - E.instr_size push in
 
-          (* JUMPDEST is a noop *)
+          (* JUMPDEST is a no-op *)
           push :: repeat padding E.JUMPDEST
 
       | Label lbl -> [ E.JUMPDEST ])

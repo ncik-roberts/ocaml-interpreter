@@ -51,6 +51,17 @@ let to_string (p : program) : string =
 (* Make header with given size and tag *)
 let header ~size ~tag = Int64.of_int (size lsl 1 land tag)
 
+(* Conditional branches *)
+let branch_cond vl ofs cond =
+  let vl = Int64.of_int vl in
+  E.{ instrs = [
+      Evm (DUP 1);
+      Evm (push vl);
+    ] @ cond @ [
+      Push_caml_code_offset (ofs-1);
+      Evm JUMPI;
+    ]; caml_len = 3; }
+
 let instr_makeblock ~size ~tag ~caml_len =
   let make_header = E.[
     (* Create and store tag *)
@@ -135,17 +146,18 @@ let convert (p : int array) : program =
      *  accumulator.
      * EVM: Same thing.
      *)
+    | I.BEQ ->
+        branch_cond p.(i+1) p.(i+2) E.[ Evm EQ; ]
     | I.BNEQ ->
-        let vl = p.(i+1) |> Int64.of_int in
-        let ofs = p.(i+2) in
-        { instrs = E.[
-            Evm (DUP 1);
-            Evm (push vl);
-            Evm EQ;
-            Evm ISZERO;
-            Push_caml_code_offset ofs;
-            Evm JUMPI;
-          ]; caml_len = 3; }
+        branch_cond p.(i+1) p.(i+2) E.[ Evm EQ; Evm ISZERO; ]
+    | I.BLTINT ->
+        branch_cond p.(i+1) p.(i+2) E.[ Evm LT; ]
+    | I.BGEINT ->
+        branch_cond p.(i+1) p.(i+2) E.[ Evm LT; Evm ISZERO; ]
+    | I.BGTINT ->
+        branch_cond p.(i+1) p.(i+2) E.[ Evm GT; ]
+    | I.BLEINT ->
+        branch_cond p.(i+1) p.(i+2) E.[ Evm GT; Evm ISZERO; ]
 
     (* Caml: Push the accumulator onto the stack and set the accumulator to
      *   a specified value.
@@ -218,26 +230,21 @@ let convert (p : int array) : program =
 
    (* Caml: Branch to pc + offset (under certain conditions)
     * EVM: Branch to absolute pc (under certain conditions)
-    *
-    * We add 1 to offset because, in Caml, the offset is calculated with
-    * respect to the byte after the branch instruction. For our purposes,
-    * it will be easier to calculate the offset with respect to the
-    * branch instruction.
     *)
     | I.BRANCH ->
         let ofs = p.(i+1) in
-        { instrs = E.[ Push_caml_code_offset (ofs+1);
+        { instrs = E.[ Push_caml_code_offset (ofs-1);
                        Evm JUMP; ];
           caml_len = 2; }
     | I.BRANCHIF ->
         let ofs = p.(i+1) in
-        { instrs = E.[ Push_caml_code_offset (ofs+1);
+        { instrs = E.[ Push_caml_code_offset (ofs-1);
                        Evm JUMPI; ];
           caml_len = 2; }
     | I.BRANCHIFNOT ->
         let ofs = p.(i+1) in
         { instrs = E.[ Evm ISZERO;
-                       Push_caml_code_offset (ofs+1);
+                       Push_caml_code_offset (ofs-1);
                        Evm JUMPI; ];
           caml_len = 2; }
 
@@ -263,7 +270,6 @@ let convert (p : int array) : program =
     else
       let group = consume i in
       loop (i + group.caml_len) ((group, i) :: acc)
-
   in
 
   (* - Initialize accumulator to 0;
@@ -280,7 +286,7 @@ let convert (p : int array) : program =
   (* TODO: Read the block size from the heap, and return the appropriate size of memory
    * (instead of always returning just one word) *)
   let teardown_instrs = [
-    Evm (E.push 0x20L);
+    Evm (E.push 0x40L);
     Evm (E.SWAP 1);
     Evm E.RETURN;
   ] in

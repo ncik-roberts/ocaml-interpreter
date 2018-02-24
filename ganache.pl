@@ -81,6 +81,7 @@ sub send_request {
   $req->content($content);
 
   my $raw_response = $ua->request( $req )->content;
+  print $raw_response, "\n";
   my $response = parse_json( $raw_response );
   return $response->{ result };
 }
