@@ -12,9 +12,11 @@ type t =
   | Evm of Evm.instr
   | Push_caml_code_offset of int
 
-type group = { instrs : t list; caml_len : int; }
-type program = group list
+type 'a group = { instrs : 'a list; caml_len : int; }
+type program = (t group * int) list
 
 (* Convert from array of bytes representing OCaml bytecode program
  * to grouped EVM program *)
 val convert : int array -> program
+
+val to_string : program -> string

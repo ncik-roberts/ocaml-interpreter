@@ -18,21 +18,35 @@ end
 
 (* List of EVM instructions, and length of Caml bytecode
  * that generated those instructions *)
-type group = {
-  instrs : t list;
-  caml_len : int
+type 'a group = {
+  instrs : 'a list;
+  caml_len : int;
 }
 
-type program = group list
+(* Int represents the total caml length of all previous groups *)
+type program = (t group * int) list
 
 (*********
  * Convenience methods for common transformations of caml instructions
  * to evm instructions
  *)
-let instrs (is : E.instr list) : group = {
+let instrs (is : E.instr list) : t group = {
   instrs = List.map (fun i -> Evm i) is;
   caml_len = 1;
 }
+
+let to_string (p : program) : string =
+  let instr_to_string = function
+    | Evm e -> "\t" ^ E.instr_to_string e
+    | Push_caml_code_offset i -> "\tofs " ^ string_of_int i
+  in
+  let group_to_string (g, total_caml_len) : string =
+    Printf.sprintf "Group (%d; total: %d):\n%s"
+      g.caml_len total_caml_len
+      (List.map instr_to_string g.instrs
+        |> String.concat "\n")
+  in
+  String.concat "\n" (List.map group_to_string p)
 
 (* Make header with given size and tag *)
 let header ~size ~tag = Int64.of_int (size lsl 1 land tag)
@@ -76,7 +90,7 @@ let instr_makeblock ~size ~tag ~caml_len =
 
 let convert (p : int array) : program =
   (* Convert one group of instructions *)
-  let consume (i : int) : group =
+  let consume (i : int) : t group =
     match I.of_opcode p.(i) with
 
     (* Caml: Binary operations pop top of stack and add to the accumulator.
@@ -116,6 +130,22 @@ let convert (p : int array) : program =
     | I.LTINT -> instrs E.[ LT ]
     | I.GEINT -> instrs E.[ LT; ISZERO; ]
     | I.GTINT -> instrs E.[ GT ]
+
+    (* Caml: (params ofs, val) increment pc by ofs-1 if val is not equal to the
+     *  accumulator.
+     * EVM: Same thing.
+     *)
+    | I.BNEQ ->
+        let vl = p.(i+1) |> Int64.of_int in
+        let ofs = p.(i+2) in
+        { instrs = E.[
+            Evm (DUP 1);
+            Evm (push vl);
+            Evm EQ;
+            Evm ISZERO;
+            Push_caml_code_offset ofs;
+            Evm JUMPI;
+          ]; caml_len = 3; }
 
     (* Caml: Push the accumulator onto the stack and set the accumulator to
      *   a specified value.
@@ -223,13 +253,16 @@ let convert (p : int array) : program =
         instr_makeblock ~size:2 ~tag:p.(i+1) ~caml_len:2
     | I.MAKEBLOCK3 ->
         instr_makeblock ~size:3 ~tag:p.(i+1) ~caml_len:2
+
+    | i -> Printf.printf "%d\n" (I.to_opcode i);
+           assert false
   in
 
   let rec loop (i : int) (acc : program) : program =
     if i >= Array.length p then List.rev acc
     else
       let group = consume i in
-      loop (i + group.caml_len) (group :: acc)
+      loop (i + group.caml_len) ((group, i) :: acc)
 
   in
 
@@ -254,12 +287,15 @@ let convert (p : int array) : program =
 
   (* Add initial setup code: need to push 0 to accumulator at first *)
   match loop 0 [] with
-  | [] -> [ { caml_len = 0; instrs = setup_instrs @ teardown_instrs } ]
-  | [g] -> [ { g with instrs = setup_instrs @ g.instrs @ teardown_instrs } ]
-  | g :: gs ->
-      let (hd, last) = match List_util.split_n gs (List.length gs - 1) with
-        | (hd, [last]) -> (hd, last)
+  | [] -> [
+    ({ caml_len = 0;
+      instrs = setup_instrs @ teardown_instrs }, 0) ]
+  | [ (g, i) ] ->
+      [ ({ g with instrs = setup_instrs @ g.instrs @ teardown_instrs }, i) ]
+  | (g, i) :: gs ->
+      let (hd, last, j) = match List_util.split_n gs (List.length gs - 1) with
+        | (hd, [(last, j)]) -> (hd, last, j)
         | _ -> assert false
       in
-      { g with instrs = setup_instrs @ g.instrs  } ::
-        hd @ [{ last with instrs = last.instrs @ teardown_instrs }]
+      ({ g with instrs = setup_instrs @ g.instrs  }, i) ::
+        hd @ [ ({ last with instrs = last.instrs @ teardown_instrs }, j) ]

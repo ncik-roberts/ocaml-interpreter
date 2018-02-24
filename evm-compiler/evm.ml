@@ -189,6 +189,9 @@ let to_bytes : program -> int list =
     | _ -> [ opcode instr ]
   in Util.concat_map ~f:instr_to_bytes
 
+let instr_size : instr -> int =
+  fun instr -> List.length (to_bytes [ instr ])
+
 let int64_to_bytes x =
   let bytes = Byte_seq.of_int64 x in
   let n = Byte_seq.length bytes in
