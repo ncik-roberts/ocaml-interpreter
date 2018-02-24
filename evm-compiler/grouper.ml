@@ -238,12 +238,14 @@ let convert (p : int array) : program =
           caml_len = 2; }
     | I.BRANCHIF ->
         let ofs = p.(i+1) in
-        { instrs = E.[ Push_caml_code_offset (ofs-1);
+        { instrs = E.[ Evm (DUP 1);
+                       Push_caml_code_offset (ofs-1);
                        Evm JUMPI; ];
           caml_len = 2; }
     | I.BRANCHIFNOT ->
         let ofs = p.(i+1) in
-        { instrs = E.[ Evm ISZERO;
+        { instrs = E.[ Evm (DUP 1);
+                       Evm ISZERO;
                        Push_caml_code_offset (ofs-1);
                        Evm JUMPI; ];
           caml_len = 2; }
@@ -286,7 +288,7 @@ let convert (p : int array) : program =
   (* TODO: Read the block size from the heap, and return the appropriate size of memory
    * (instead of always returning just one word) *)
   let teardown_instrs = [
-    Evm (E.push 0x40L);
+    Evm (E.push 0x60L);
     Evm (E.SWAP 1);
     Evm E.RETURN;
   ] in
