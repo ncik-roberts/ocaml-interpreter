@@ -284,26 +284,11 @@ let convert (p : int array) : program =
     Evm (E.MSTORE);
   ] in
 
-  (* Currently, let's just load the value at the address on the top of the stack *)
-  (* TODO: Read the block size from the heap, and return the appropriate size of memory
-   * (instead of always returning just one word) *)
-  let teardown_instrs = [
-    Evm (E.push 0x60L);
-    Evm (E.SWAP 1);
-    Evm E.RETURN;
-  ] in
-
   (* Add initial setup code: need to push 0 to accumulator at first *)
   match loop 0 [] with
   | [] -> [
-    ({ caml_len = 0;
-      instrs = setup_instrs @ teardown_instrs }, 0) ]
+    ({ caml_len = 0; instrs = setup_instrs }, 0) ]
   | [ (g, i) ] ->
-      [ ({ g with instrs = setup_instrs @ g.instrs @ teardown_instrs }, i) ]
+      [ ({ g with instrs = setup_instrs @ g.instrs }, i) ]
   | (g, i) :: gs ->
-      let (hd, last, j) = match List_util.split_n gs (List.length gs - 1) with
-        | (hd, [(last, j)]) -> (hd, last, j)
-        | _ -> assert false
-      in
-      ({ g with instrs = setup_instrs @ g.instrs  }, i) ::
-        hd @ [ ({ last with instrs = last.instrs @ teardown_instrs }, j) ]
+      ({ g with instrs = setup_instrs @ g.instrs  }, i) :: gs

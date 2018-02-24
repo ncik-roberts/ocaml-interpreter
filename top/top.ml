@@ -17,9 +17,23 @@ let repeat4 f =
   (x1, x2, x3, x4)
 
 let main () =
-  let filename = match Array.length Sys.argv with
-    | 2 -> Sys.argv.(1)
-    | _ -> prerr_endline "Expected: 1 file argument";
+
+  (* File to compile *)
+  let filename =
+    if Array.length Sys.argv >= 2
+    then Sys.argv.(1)
+    else begin
+      prerr_endline "Expected: 1 file argument";
+      raise Exit;
+    end
+  in
+
+  (* Number of declarations to return after completion *)
+  let i =
+    match Array.length Sys.argv with
+    | 3 -> int_of_string Sys.argv.(2)
+    | 2 -> 1 (* read 1 by default *)
+    | _ -> prerr_endline "Optional: 1 length argument";
            raise Exit
   in
 
@@ -50,7 +64,7 @@ let main () =
     |> Grouper.convert
     |> (fun x -> Printf.printf "%s\n" (Grouper.to_string x); x)
     |> Jump_dests.process
-    |> Copy_code.copy_code
+    |> Copy_code.copy_code ~return_size:i
     |> Copy_code.to_evm
   in
 
