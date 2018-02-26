@@ -124,5 +124,6 @@ let remove_labels (p : program) : E.instr list list =
 (** See MLI file *)
 let process (p : G.program) : E.program =
   insert_labels p
+    |> fun x -> (Printf.printf "%s\n" (to_string x); x)
     |> remove_labels
     |> List.concat

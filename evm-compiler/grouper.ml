@@ -57,7 +57,7 @@ let to_string (p : program) : string =
   String.concat "\n" (List.map group_to_string p)
 
 (* Make header with given size and tag *)
-let header ~size ~tag = Int64.of_int (size lsl 1 land tag)
+let header ~size ~tag = Int64.of_int (size lsl 1 lor tag)
 
 (* Conditional branches *)
 let branch_cond vl ofs cond =
@@ -99,7 +99,8 @@ let alloc ~size ~tag =
 
   make_header @ update_heap_ctr
 
-let instr_makeblock ~size ~tag ~caml_len =
+(* Makeblock instruction with various arguments *)
+let instr_makeblock ~size ~tag ~caml_len : t group =
   let range = Util.range ~lo:0 ~hi:size in
   let make_body = Util.concat_map range ~f:(fun i -> E.[
     SWAP 1;
@@ -111,6 +112,101 @@ let instr_makeblock ~size ~tag ~caml_len =
 
   { (instrs (alloc ~size ~tag @ make_body))
       with caml_len }
+
+(* Apply instruction with various arguments *)
+let instr_apply (n : int) : t group =
+  let lbl = Label.create () in
+
+  (* Figure out where to store arguments on heap *)
+  let setup = E.[
+    (* Save acc on heap for now, it simplifies the logic *)
+    Evm (push C.acc_addr);
+    Evm MSTORE;
+    Evm (push C.heap_ctr_addr);
+    Evm MLOAD;
+  ] in
+
+  (* Store all n arguments on the heap *)
+  let store =
+    Util.range ~lo:0 ~hi:n
+    |> Util.concat_map ~f:(fun i -> E.[
+        Evm (SWAP 1); (* Get top item of stack (skipping address) *)
+        Evm (DUP 2); (* Clone previous address *)
+        Evm MSTORE;
+
+        (* Increase address at top of stack by 32 *)
+        Evm (push 0x20L);
+        Evm ADD;
+      ])
+  in
+
+  (* Push extra_args, environment, and pc *)
+  let push_instrs = E.[
+    Evm POP;
+
+    Evm (push C.extra_args_addr);
+    Evm MLOAD;
+
+    Evm (push C.env_addr);
+    Evm MLOAD;
+
+    Goto lbl; (* Push address of label onto stack *)
+  ] in
+
+  (* For restoring heap items to stack, we start from highest address *)
+  let restore_setup =
+    let x = 0x20 * (n-1) |> Int64.of_int in E.[
+      Evm (push Int64.(add C.heap_ctr_addr x));
+      Evm MLOAD;
+    ] in
+
+  let restore_stack =
+    Util.range ~lo:0 ~hi:n
+    |> Util.concat_map ~f:(fun i -> E.[
+        Evm (DUP 1);
+        Evm MLOAD;
+        Evm (SWAP 1);
+
+        (* Decrease address at top of stack by 32 *)
+        Evm (push 0x20L);
+        Evm (SWAP 1);
+        Evm SUB;
+      ])
+  in
+
+  let restore_acc = E.[
+    Evm POP; (* Remove heap ctr from top of stack *)
+    Evm (push C.acc_addr);
+    Evm MLOAD;
+  ] in
+
+  (* We now set up values of env and extra_args *)
+  let enter_function_call = E.[
+
+    (* Set new value of env and extra_args *)
+    Evm (DUP 1);
+    Evm (push C.env_addr);
+    Evm MSTORE;
+    Evm (push 0L);
+    Evm (push C.extra_args_addr);
+    Evm MSTORE;
+
+    (* JUMP *)
+    Evm (DUP 1);
+    Evm MLOAD; (* access code value of accumulator *)
+    Evm JUMP;
+
+    (* We need to store the pc for this instruction *)
+    Label lbl;
+  ] in {
+    instrs = setup
+           @ store
+           @ push_instrs
+           @ restore_setup
+           @ restore_stack
+           @ restore_acc
+           @ enter_function_call;
+    caml_len = 1 }
 
 let convert (p : int array) : program =
   (* Convert one group of instructions *)
@@ -285,6 +381,12 @@ let convert (p : int array) : program =
     | I.RETURN ->
         let n = p.(i+1) in
 
+        (* Store acc on heap for now... *)
+        let store_acc = E.[
+          Evm (push C.acc_addr);
+          Evm MSTORE;
+        ] in
+
         let pops = Util.tabulate ~f:(fun _ -> Evm E.POP) n in
         let label = Label.create () in
         let instrs = E.[
@@ -304,13 +406,44 @@ let convert (p : int array) : program =
           Evm (push C.env_addr);
           Evm MSTORE;
 
+          (* Restore acc behind pc *)
+          Evm (push C.acc_addr);
+          Evm MLOAD;
+          Evm (SWAP 1);
+
           (* Stack: pc :: ... *)
           Evm JUMP;
 
+          (* Here, the extra_args > 0 *)
           Label label;
+
+          (* Restore acc *)
+          Evm (push C.acc_addr);
+          Evm MLOAD;
+
+          (* Decrement extra_args *)
+          Evm (push 1L);
+          Evm (push C.extra_args_addr);
+          Evm MLOAD;
+          Evm SUB;
+          Evm (push C.extra_args_addr);
+          Evm MSTORE;
+
+          (* Store acc in env *)
+          Evm (DUP 1);
+          Evm (push C.env_addr);
+          Evm MLOAD;
+
+          (* Jump to code value of acc *)
+          Evm (DUP 1);
+          Evm MLOAD;
+          Evm JUMP;
         ] in
 
-        { instrs = pops @ instrs; caml_len = 2; }
+        { instrs = store_acc
+                 @ pops
+                 @ instrs;
+                 caml_len = 2; }
 
 
     (* Caml: Check value of n. If it's greater than 0, then the
@@ -326,9 +459,9 @@ let convert (p : int array) : program =
         let n = p.(i+1) in
         let ofs = p.(i+2) in
 
-        (* Optionally push acc to stack *)
+        (* Optionally keep acc *)
         let setup =
-          if n > 0 then E.[ Evm (DUP 1) ] else []
+          if n > 0 then [] else E.[ Evm POP ]
         in
 
         (* Perform allocation of closure *)
@@ -339,7 +472,7 @@ let convert (p : int array) : program =
 
         (* Store code_val in memory *)
         let code_val = E.[
-          Push_caml_code_offset ofs;
+          Push_caml_code_offset (ofs-1);
           Evm (DUP 2);
           Evm MSTORE;
         ] in
@@ -358,7 +491,31 @@ let convert (p : int array) : program =
         { instrs = setup @ do_alloc @ code_val @ move_from_stack;
           caml_len = 3; }
 
-    | i -> Printf.printf "%d\n" (I.to_opcode i);
+    | I.APPLY ->
+        let args = p.(i+1) in
+        { caml_len = 2;
+          instrs = E.[
+            (* Store args-1 as extra_args *)
+            Evm (push (args - 1 |> Int64.of_int));
+            Evm (push C.extra_args_addr);
+            Evm MSTORE;
+
+            (* Set environment to the value of the accumulator *)
+            Evm (DUP 1);
+            Evm (push C.acc_addr);
+            Evm MSTORE;
+
+            (* Set pc to code value of accumulator *)
+            Evm (DUP 1);
+            Evm MLOAD;
+            Evm JUMP;
+          ]; }
+
+    | I.APPLY1 -> instr_apply 1
+    | I.APPLY2 -> instr_apply 2
+    | I.APPLY3 -> instr_apply 3
+
+    | i -> Printf.printf "Unimplemented opcode: %d\n" (I.to_opcode i);
            assert false
   in
 

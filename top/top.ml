@@ -49,8 +49,12 @@ let main () =
   let rec read acc =
     let (b1, b2, b3, b4) = repeat4 (fun () -> input_byte cmo_file) in
     let x = (b4 lsl 24) lor (b3 lsl 16) lor (b2 lsl 8) lor b1 in
+
+    (* Sign extend to 32 bits *)
+    let x_sgnextend = Int32.to_int (Int32.of_int x) in
+
     if x = 0xBEA69584 then acc
-    else read (x :: acc)
+    else read (x_sgnextend :: acc)
   in
 
   let result = read []
@@ -62,7 +66,7 @@ let main () =
   let output = result
     |> Array.of_list
     |> Grouper.convert
-    |> (fun x -> Printf.printf "%s\n" (Grouper.to_string x); x)
+    (*|> fun x -> Printf.printf"%s\n" (Grouper.to_string x); x*)
     |> Jump_dests.process
     |> Copy_code.copy_code ~return_size:i
     |> Copy_code.to_evm
