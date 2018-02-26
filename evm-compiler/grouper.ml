@@ -196,8 +196,10 @@ let instr_apply (n : int) : t group =
   (* For restoring heap items to stack, we start from highest address *)
   let restore_setup =
     let x = 0x20 * (n-1) |> Int64.of_int in E.[
-      Evm (push Int64.(add C.heap_ctr_addr x));
+      Evm (push C.heap_ctr_addr);
       Evm MLOAD;
+      Evm (push x);
+      Evm ADD;
     ] in
 
   let restore_stack =
@@ -227,7 +229,7 @@ let instr_apply (n : int) : t group =
     Evm (DUP 1);
     Evm (push C.env_addr);
     Evm MSTORE;
-    Evm (push 0L);
+    Evm (push (Int64.of_int (n-1)));
     Evm (push C.extra_args_addr);
     Evm MSTORE;
 
@@ -640,9 +642,6 @@ let convert (p : int array) : program =
         let loop = Label.create () in
 
         let instrs = E.[
-          (* Lose acc *)
-          Evm POP;
-
           (* If extra_args >= n, *)
           Evm (push C.extra_args_addr);
           Evm MLOAD;
@@ -660,8 +659,12 @@ let convert (p : int array) : program =
           Evm (push C.extra_args_addr);
           Evm MSTORE;
           Goto exit;
+          Evm JUMP;
 
-          (* Otherwise, create a closure of extra_args + 3 elements *)
+          (* Otherwise, create a closure of extra_args + 3 elements,
+           * after popping the former acc value. *)
+          Evm (SWAP 1);
+          Evm POP;
           Label lbl;
           Evm (push 3L);
           Evm ADD;
