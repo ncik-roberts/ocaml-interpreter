@@ -12,6 +12,7 @@ type t =
 
 (* Constants relevant to execution of EVM *)
 module C = struct
+  let word_size = 0x20L
   let stack_depth = 16 (* How deep instructions can index into the stack *)
   let acc_addr = 0L (* Address where acc is saved *)
   let heap_ctr_addr = 0x20L (* Address where heap counter is saved *)
@@ -70,6 +71,45 @@ let branch_cond vl ofs cond =
       Evm JUMPI;
     ]; caml_len = 3; }
 
+(* Allocate block of size given at top of stack.
+ * Update heap ctr, and leave address at top of stack.
+ *)
+let alloc_dyn ~tag =
+  let make_header = E.[
+    Evm (DUP 1);
+    Evm (push 2L);
+    Evm MUL;
+    Evm (push (Int64.of_int tag));
+    Evm OR;
+    Evm (push C.heap_ctr_addr);
+    Evm MLOAD;
+    Evm MSTORE;
+  ] in
+
+  let update_heap_ctr = E.[
+    (* Calculate word*(n+1) for new heap ctr. *)
+    Evm (push 1L);
+    Evm ADD;
+    Evm (push C.word_size);
+    Evm MUL;
+
+    (* Push heap_ctr onto stack twice, and add word*(n+1) to one of them *)
+    Evm (push C.heap_ctr_addr);
+    Evm MLOAD;
+    Evm (DUP 1);
+    Evm (SWAP 2);
+    Evm ADD;
+
+    Evm (push C.heap_ctr_addr);
+    Evm MSTORE;
+
+    (* Leave allocated address at top of stack *)
+    Evm (push C.word_size);
+    Evm ADD;
+  ]
+
+  in make_header @ update_heap_ctr
+
 (* Allocate block of given size and tag, update heap ctr,
  * and leave address to block at top of stack *)
 let alloc ~size ~tag =
@@ -91,9 +131,9 @@ let alloc ~size ~tag =
     push C.heap_ctr_addr;
     MSTORE;
 
-    (* Add 32 to old heap counter so that it points to the first entry
+    (* Add word size to old heap counter so that it points to the first entry
      * in the block (and not the tag) *)
-    push 0x20L;
+    push C.word_size;
     ADD;
   ] in
 
@@ -135,7 +175,7 @@ let instr_apply (n : int) : t group =
         Evm MSTORE;
 
         (* Increase address at top of stack by 32 *)
-        Evm (push 0x20L);
+        Evm (push C.word_size);
         Evm ADD;
       ])
   in
@@ -167,8 +207,8 @@ let instr_apply (n : int) : t group =
         Evm MLOAD;
         Evm (SWAP 1);
 
-        (* Decrease address at top of stack by 32 *)
-        Evm (push 0x20L);
+        (* Decrease address at top of stack by word size *)
+        Evm (push C.word_size);
         Evm (SWAP 1);
         Evm SUB;
       ])
@@ -331,11 +371,15 @@ let convert (p : int array) : program =
      *   Restore top of stack from "save" location.
      *)
     | I.POP ->
-        let n = p.(i+1) in
-        let setup = E.[ push C.acc_addr; MSTORE; ] in
-        let body = Util.tabulate ~f:(fun _ -> E.POP) n in
-        let teardown = E.[ push C.acc_addr; MLOAD; ] in
-        { (instrs (setup @ body @ teardown)) with caml_len = 2 }
+        let is = match p.(i+1) with
+          | 1 -> E.[ SWAP 1; POP; ]
+          | n ->
+            let setup = E.[ push C.acc_addr; MSTORE; ] in
+            let body = Util.tabulate ~f:(fun _ -> E.POP) n in
+            let teardown = E.[ push C.acc_addr; MLOAD; ] in
+            setup @ body @ teardown
+        in
+        { (instrs is) with caml_len = 2 }
 
    (* Caml: Branch to pc + offset (under certain conditions)
     * EVM: Branch to absolute pc (under certain conditions)
@@ -514,6 +558,196 @@ let convert (p : int array) : program =
     | I.APPLY1 -> instr_apply 1
     | I.APPLY2 -> instr_apply 2
     | I.APPLY3 -> instr_apply 3
+
+    (* Used in closures *)
+    | I.RESTART ->
+        let exit = Label.create () in
+        let loop = Label.create () in {
+          caml_len = 1;
+          instrs = E.[
+            (* Save acc *)
+            Evm (push C.acc_addr);
+            Evm MSTORE;
+
+            Evm (push 2L); (* Subtract 2 later *)
+            Evm (push 2L); (* Divide by 2 later *)
+
+            (* Compute size of environment, which is stored in the header
+             * of the environment. *)
+            Evm (push C.word_size);
+            Evm (push C.env_addr);
+            Evm SUB;
+            Evm MLOAD;
+
+            (* Shift by 1 to get the size bits of the header *)
+            Evm DIV;
+            (* Calculate n as |env| - 2 *)
+            Evm SUB;
+
+            (* Increase extra_args by n *)
+            Evm (DUP 1);
+            Evm (push C.extra_args_addr);
+            Evm MLOAD;
+            Evm ADD;
+            Evm (push C.extra_args_addr);
+            Evm MSTORE;
+
+            (* Place word_size*(n+1) at top of stack *)
+            Evm (push 1L);
+            Evm ADD;
+            Evm (push C.word_size);
+            Evm MUL;
+
+            (* Create a loop to place elements n+1 to 2 on stack *)
+            Label loop;
+
+            (* Exit loop if we are below 2 elements on stack *)
+            Evm (DUP 1);
+            Evm (push Int64.(mul C.word_size 2L));
+            Evm GT;
+            Goto exit;
+            Evm JUMPI;
+
+            (* Push heap element onto stack and update index *)
+            Evm (DUP 1);
+            Evm (push C.word_size);
+            Evm (SWAP 1);
+            Evm MLOAD;
+            Evm (SWAP 2);
+            Evm SUB;
+
+            Goto loop;
+            Evm JUMP;
+            Label exit;
+
+            (* We use last index left on the stack to load the new environment *)
+            Evm MLOAD;
+            Evm (push C.env_addr);
+            Evm MSTORE;
+
+            (* Restore acc *)
+            Evm (push C.acc_addr);
+            Evm MLOAD;
+          ];
+        }
+
+    | I.GRAB ->
+        let n = p.(i+1) in
+        let lbl = Label.create () in
+        let exit = Label.create () in
+
+        (* Loop for iterating extra_args many times *)
+        let loop = Label.create () in
+
+        let instrs = E.[
+          (* Lose acc *)
+          Evm POP;
+
+          (* If extra_args >= n, *)
+          Evm (push C.extra_args_addr);
+          Evm MLOAD;
+          Evm (DUP 1); (* Place an extra extra_args on the stack
+                        * to be consumed after the jump *)
+          Evm (push (Int64.of_int n));
+          Evm LT;
+          Goto lbl;
+          Evm JUMPI;
+
+          (* then decrement extra_args by n, and that's it. *)
+          Evm (push (Int64.of_int n));
+          Evm (SWAP 1);
+          Evm SUB;
+          Evm (push C.extra_args_addr);
+          Evm MSTORE;
+          Goto exit;
+
+          (* Otherwise, create a closure of extra_args + 3 elements *)
+          Label lbl;
+          Evm (push 3L);
+          Evm ADD;
+
+        (* Allocate a closure *)
+        ] @ alloc_dyn ~tag:C.closure_tag @ E.[
+          (* Code value is PC - 3 *)
+          Push_caml_code_offset (-3);
+          Evm (DUP 2);
+          Evm MSTORE;
+
+          (* index 1 is env *)
+          Evm (push C.env_addr);
+          Evm MLOAD;
+          Evm (DUP 2);
+          Evm (push C.word_size);
+          Evm ADD;
+          Evm MSTORE;
+
+          (* Increment original address by 2 words to start storing stack items *)
+          Evm (push Int64.(mul 2L C.word_size));
+          Evm ADD;
+
+          (* Put extra_args+1 on the stack as a loop counter *)
+          Evm (push C.extra_args_addr);
+          Evm MLOAD;
+          Evm (push 1L);
+          Evm ADD;
+
+          (* It's a do-while loop, since extra_args+1 > 0 *)
+          Label loop;
+          (* loop_ctr :: addr :: item :: ... *)
+          Evm (SWAP 2);
+          (* item :: addr :: loop_ctr :: ... *)
+          Evm (DUP 2);
+          (* addr :: item :: addr :: loop_ctr :: ... *)
+          Evm MSTORE;
+          (* addr :: loop_ctr :: ... *)
+
+          Evm (push C.word_size);
+          Evm ADD;
+          (* addr' :: loop_ctr :: ... *)
+          Evm (SWAP 1);
+          Evm (push 1L);
+          Evm (SWAP 1);
+          Evm SUB;
+          (* loop_ctr' :: addr' :: ... *)
+
+          (* Goto loop if loop_ctr' is not 0 *)
+          Evm (DUP 1);
+          Goto loop;
+          Evm JUMPI;
+
+          Evm POP;
+          (* addr :: ... *)
+
+          (* We now subtract word_size*(extra_args+3) from the addr on the
+           * top of the stack *)
+          Evm (push 3L);
+          Evm (push C.extra_args_addr);
+          Evm MLOAD;
+          Evm ADD;
+          Evm (push C.word_size);
+          Evm MUL;
+
+          Evm (SWAP 1);
+          Evm SUB;
+
+          (* Finally, pop pc, environment, and extra_args from top of stack *)
+          (* addr :: pc :: env :: extra_args *)
+          Evm (SWAP 3);
+          (* extra_args :: pc :: env :: addr *)
+          Evm (push C.extra_args_addr);
+          Evm MSTORE;
+          (* pc :: env :: addr *)
+          Evm (SWAP 1);
+          Evm (push C.env_addr);
+          Evm MSTORE;
+          (* pc :: addr *)
+          Evm JUMP;
+
+          (* Exit label from the if branch a long time ago... *)
+          Label exit;
+        ]
+
+        in { instrs; caml_len = 2; }
 
     | i -> Printf.printf "Unimplemented opcode: %d\n" (I.to_opcode i);
            assert false
