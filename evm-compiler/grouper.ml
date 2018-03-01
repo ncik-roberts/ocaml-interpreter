@@ -578,6 +578,7 @@ let convert (p : int array) : program =
              * of the environment. *)
             Evm (push C.word_size);
             Evm (push C.env_addr);
+            Evm MLOAD;
             Evm SUB;
             Evm MLOAD;
 
@@ -614,6 +615,9 @@ let convert (p : int array) : program =
             Evm (DUP 1);
             Evm (push C.word_size);
             Evm (SWAP 1);
+            Evm (push C.env_addr);
+            Evm MLOAD;
+            Evm ADD;
             Evm MLOAD;
             Evm (SWAP 2);
             Evm SUB;
@@ -648,6 +652,7 @@ let convert (p : int array) : program =
           Evm (DUP 1); (* Place an extra extra_args on the stack
                         * to be consumed after the jump *)
           Evm (push (Int64.of_int n));
+          Evm (SWAP 1);
           Evm LT;
           Goto lbl;
           Evm JUMPI;
@@ -663,9 +668,9 @@ let convert (p : int array) : program =
 
           (* Otherwise, create a closure of extra_args + 3 elements,
            * after popping the former acc value. *)
+          Label lbl;
           Evm (SWAP 1);
           Evm POP;
-          Label lbl;
           Evm (push 3L);
           Evm ADD;
 
