@@ -478,7 +478,7 @@ let convert (p : int array) : program =
           (* Store acc in env *)
           Evm (DUP 1);
           Evm (push C.env_addr);
-          Evm MLOAD;
+          Evm MSTORE;
 
           (* Jump to code value of acc *)
           Evm (DUP 1);
