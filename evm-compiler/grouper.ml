@@ -199,6 +199,18 @@ let instr_appterm ~(n : int) ~(s : int) =
       Evm SUB;
     ])
   in
+
+  (* Update value of extra_args *)
+  let update_extra_args =
+    if n = 1 then [] else E.[
+      Evm (push C.extra_args_addr);
+      Evm MLOAD;
+      Evm (push (Int64.of_int (n-1)));
+      Evm ADD;
+      Evm (push C.extra_args_addr);
+      Evm MSTORE;
+    ]
+  in
   {
     caml_len = 1;
     instrs = E.[
@@ -223,7 +235,9 @@ let instr_appterm ~(n : int) ~(s : int) =
     @ E.[
       Evm (push C.acc_addr);
       Evm MLOAD;
-
+    ]
+    @ update_extra_args
+    @ E.[
       (* Set env and pc to value of acc *)
       Evm (DUP 1);
       Evm (DUP 1);
@@ -881,6 +895,10 @@ let convert (p : int array) : program =
         { (instr_envacc n) with caml_len = 2; }
 
     | I.APPTERM1 -> instr_appterm ~s:p.(i+1) ~n:1
+    | I.APPTERM2 -> instr_appterm ~s:p.(i+1) ~n:2
+    | I.APPTERM3 -> instr_appterm ~s:p.(i+1) ~n:3
+    | I.APPTERM ->
+        { (instr_appterm ~n:p.(i+1) ~s:p.(i+2)) with caml_len = 2 }
 
     | i -> Printf.printf "Unimplemented opcode: %d\n" (I.to_opcode i);
            assert false
