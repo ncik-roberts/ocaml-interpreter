@@ -1,5 +1,5 @@
 all:
-	ocamlbuild -use-ocamlfind top.native
+	ocamlbuild -use-ocamlfind top.byte
 clean:
 	ocamlbuild -clean
 	rm a.out

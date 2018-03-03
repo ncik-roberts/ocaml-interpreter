@@ -1,4 +1,4 @@
-true: package(oUnit)
+true: package(oUnit), debug
 "evm-compiler": include
 "util": include
 "tests": include
