@@ -153,6 +153,86 @@ let instr_makeblock ~size ~tag ~caml_len : t group =
   { (instrs (alloc ~size ~tag @ make_body))
       with caml_len }
 
+(* Access members of env, pushing acc further onto stack *)
+let instr_pushenvacc (n : int) : t group =
+  let addr = Int64.(mul (of_int n) C.word_size) in
+  instrs E.[
+    push C.env_addr;
+    MLOAD;
+    push addr;
+    ADD;
+    MLOAD;
+  ]
+
+(* Access members of env, first removing acc *)
+let instr_envacc (n : int) : t group =
+  let g = instr_pushenvacc n in
+  { g with instrs = Evm E.POP :: g.instrs }
+
+(* TODO: more careful consideration of whether to keep address on
+ * stack while doing the popping *)
+let instr_appterm ~(n : int) ~(s : int) =
+  (* Move all arguments into memory *)
+  let setup_heap = Util.range ~lo:0 ~hi:n
+    |> Util.concat_map ~f:(fun _ -> E.[
+      Evm (SWAP 1);
+      Evm (DUP 2);
+      Evm MSTORE;
+      Evm (push C.word_size);
+      Evm ADD;
+    ])
+  in
+
+  (* Pop after we move all arguments into memory *)
+  let pops = Util.range ~lo:0 ~hi:(s-n)
+    |> List.map (fun _ -> Evm E.POP)
+  in
+
+  (* Move arguments back *)
+  let teardown_heap = Util.range ~lo:0 ~hi:n
+    |> Util.concat_map ~f:(fun _ -> E.[
+      Evm (DUP 1);
+      Evm MLOAD;
+      Evm (SWAP 1);
+      Evm (push C.word_size);
+      Evm (SWAP 1);
+      Evm SUB;
+    ])
+  in
+  {
+    caml_len = 1;
+    instrs = E.[
+      Evm (push C.acc_addr);
+      Evm MSTORE;
+
+      (* Move heap ctr to top of stack *)
+      Evm (push C.heap_ctr_addr);
+      Evm MLOAD;
+    ]
+    @ setup_heap
+    @ E.[ Evm POP ]
+    @ pops
+    @ E.[
+      Evm (push C.heap_ctr_addr);
+      Evm MLOAD;
+      Evm (push Int64.(mul C.word_size (of_int (n-1))));
+      Evm ADD;
+    ]
+    @ teardown_heap
+    @ E.[ Evm POP ]
+    @ E.[
+      Evm (push C.acc_addr);
+      Evm MLOAD;
+
+      (* Set env and pc to value of acc *)
+      Evm (DUP 1);
+      Evm (DUP 1);
+      Evm (push C.env_addr);
+      Evm MSTORE;
+      Evm MLOAD;
+      Evm JUMP;
+    ]; }
+
 (* Apply instruction with various arguments *)
 let instr_apply (n : int) : t group =
   let lbl = Label.create () in
@@ -276,9 +356,17 @@ let convert (p : int array) : program =
     | I.LSRINT -> assert false
     | I.ASRINT -> assert false
 
-    | I.OFFSETINT ->
-        let n = Int64.of_int p.(i + 1) in
-        { (instrs E.[ push n; ADD; ]) with caml_len = 2 }
+    | I.OFFSETINT -> begin
+        match p.(i+1) with
+        | x when x >= 0 ->
+            let n = Int64.of_int p.(i + 1) in
+            { (instrs E.[ push n; ADD; ]) with caml_len = 2 }
+
+        (* otherwise, x is negative *)
+        | x ->
+            let n = Int64.of_int (-p.(i+1)) in
+            { (instrs E.[ push n; SWAP 1; SUB; ]) with caml_len = 2 }
+      end
 
     (* Caml: Comparison operators pop top of stack and compare with the
      *   accumulator, storing the result value in accumulator.
@@ -561,6 +649,22 @@ let convert (p : int array) : program =
     | I.APPLY2 -> instr_apply 2
     | I.APPLY3 -> instr_apply 3
 
+    (* We push in a different order than Caml bytecode, but then the swap
+     * 3 instruction correctly places the extra_args value at the bottom of
+     * the three items on the stack (and maintains the acc at the top) *)
+    | I.PUSH_RETADDR ->
+        let ofs = p.(i + 1) in {
+          caml_len = 2;
+          instrs = E.[
+            Evm (push C.env_addr);
+            Evm MLOAD;
+            Push_caml_code_offset (ofs-1);
+            Evm (push C.extra_args_addr);
+            Evm MLOAD;
+            Evm (SWAP 3);
+          ];
+        }
+
     (* Used in closures *)
     | I.RESTART ->
         let exit = Label.create () in
@@ -627,6 +731,9 @@ let convert (p : int array) : program =
             Label exit;
 
             (* We use last index left on the stack to load the new environment *)
+            Evm (push C.env_addr);
+            Evm MLOAD;
+            Evm ADD;
             Evm MLOAD;
             Evm (push C.env_addr);
             Evm MSTORE;
@@ -756,6 +863,24 @@ let convert (p : int array) : program =
         ]
 
         in { instrs; caml_len = 2; }
+
+    | I.PUSHENVACC1 -> instr_pushenvacc 1
+    | I.PUSHENVACC2 -> instr_pushenvacc 2
+    | I.PUSHENVACC3 -> instr_pushenvacc 3
+    | I.PUSHENVACC4 -> instr_pushenvacc 4
+    | I.PUSHENVACC ->
+        let n = p.(i+1) in
+        { (instr_pushenvacc n) with caml_len = 2; }
+
+    | I.ENVACC1 -> instr_envacc 1
+    | I.ENVACC2 -> instr_envacc 2
+    | I.ENVACC3 -> instr_envacc 3
+    | I.ENVACC4 -> instr_envacc 4
+    | I.ENVACC ->
+        let n = p.(i+1) in
+        { (instr_envacc n) with caml_len = 2; }
+
+    | I.APPTERM1 -> instr_appterm ~s:p.(i+1) ~n:1
 
     | i -> Printf.printf "Unimplemented opcode: %d\n" (I.to_opcode i);
            assert false

@@ -1,9 +1,9 @@
 (* Bytes are a reversed list of characters *)
 type t = char list
 
-let to_char x = Char.unsafe_chr (Int64.to_int x)
+let to_char x = Char.chr (Int64.to_int x)
 
-let of_int64 =
+let of_int64 : int64 -> char list =
   let mask = 0xFF in
   let mask64 = Int64.of_int mask in
   let rec loop x ~acc =
@@ -15,7 +15,7 @@ let of_int64 =
   in loop ~acc:[]
 
 let alphabet = "0123456789ABCDEF"
-let byte_to_string c =
+let byte_to_string (c : char) : string =
   let x = Char.code c in
   let fst = alphabet.[x / 16] in
   let snd = alphabet.[x mod 16] in
@@ -25,7 +25,7 @@ let byte_to_string c =
 
 let length = List.length
 
-let to_string bytes =
+let to_string (bytes : t) : string =
   let str = List.fold_left (fun acc x -> byte_to_string x ^ acc) "" bytes in
   "0x" ^ str
 
